@@ -5,10 +5,14 @@ set(PICO_BOARD pico_w)
 
 add_executable(final_demo
     src/main.c
-    src/servo.c
     src/imu.c
-    src/ultrasonic.c
+    src/motors.c
+    src/encoders.c
+    src/ir_sensors.c
     src/barcode.c
+    src/ultrasonic.c
+    src/navigation.c
+    src/utils.c
 )
 
 target_include_directories(final_demo PRIVATE
