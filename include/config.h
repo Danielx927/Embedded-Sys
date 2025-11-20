@@ -1,10 +1,3 @@
-/**
- * @file    config.h
- * @brief   Configuration constants and hardware pin definitions
- * @author  Embedded Systems
- * @date    2025
- */
-
 #ifndef CONFIG_H
 #define CONFIG_H
 
@@ -50,9 +43,9 @@ typedef uint8_t bool_t;
 #define PWM_M2B             10
 #define PWM_WRAP            65535U
 #define PWM_CLKDIV          44.0f
-#define MIN_DUTY            0.24f
-#define RIGHT_DUTY_FACTOR   0.92f
-#define INITIAL_BASE_DUTY   0.24f
+#define MIN_DUTY            0.3f
+#define RIGHT_DUTY_FACTOR   0.95f
+#define INITIAL_BASE_DUTY   0.30f
 
 /*******************************************************************************
  * ENCODER CONFIGURATION
@@ -78,13 +71,14 @@ typedef uint8_t bool_t;
 #define ECHO_PIN            2
 #define SERVO_PIN           15
 #define SERVO_CENTER        1500
-#define SERVO_LEFT_START    1500
-#define SERVO_RIGHT_START   1500
-#define SERVO_LEFT_MAX      1800
-#define SERVO_RIGHT_MAX     1200
-#define SERVO_STEP          50
-#define SERVO_SCAN_DELAY_MS 200
-#define SERVO_DEG_PER_PULSE 0.03f
+#define SERVO_LEFT_START    1550
+#define SERVO_RIGHT_START   1450
+#define SERVO_LEFT_MAX      2000
+#define SERVO_RIGHT_MAX     1000
+#define SERVO_STEP          10
+#define SERVO_SCAN_DELAY_MS 500
+#define SERVO_PULSE_PER_30DEG 260.0f
+#define SERVO_DEG_PER_PULSE (30.0f / SERVO_PULSE_PER_30DEG)
 
 /*******************************************************************************
  * PID CONSTANTS
@@ -118,13 +112,13 @@ typedef uint8_t bool_t;
 /*******************************************************************************
  * NAVIGATION CONSTANTS
  ******************************************************************************/
-#define TARGET_SPEED_MS     0.01f
+#define TARGET_SPEED_MS     0.08f
 #define RAMP_TIME_SEC       2.5f
 #define TURN_SPEED_MS       0.08f
 #define TURN_DURATION_MS    1500
 #define RECOVERY_TURN_RATE  0.1f
 #define RECOVERY_TURN_RATE_SWITCHED 0.2f
-#define RECOVERY_SPEED_SWITCHED 0.10f
+#define RECOVERY_SPEED_SWITCHED 0.16f
 #define RECOVERY_DISABLE_TIME_MS 1800
 #define RECOVERY_TIMEOUT_MS 2250
 #define CURVE_DETECTION_THRESHOLD 600.0f
@@ -136,7 +130,7 @@ typedef uint8_t bool_t;
  ******************************************************************************/
 #define OBSTACLE_THRESHOLD  20.0f
 #define OBSTACLE_STOP_TIME_MS 10000
-#define DISTANCE_JUMP_THRESHOLD 5.0f
+#define DISTANCE_JUMP_THRESHOLD 2.0f
 
 /*******************************************************************************
  * DETOUR NAVIGATION
@@ -162,7 +156,7 @@ typedef uint8_t bool_t;
 #define MAX_WIDTHS         200
 #define SCAN_TIMEOUT_MS    10000
 #define BARCODE_PROCESS_TIMEOUT_MS 100
-#define TURN_DELAY_MS      2000
+#define TURN_DELAY_MS      1000
 #define LONG_WIDTH_US      2000000
 #define MIN_VALID_WIDTH_US 5000
 #define THRESHOLD_MULTIPLIER 2.0f

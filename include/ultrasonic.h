@@ -1,14 +1,8 @@
-/**
- * @file    ultrasonic.h
- * @brief   Ultrasonic sensor and servo scanning interface
- * @author  Embedded Systems
- * @date    2025
- */
-
 #ifndef ULTRASONIC_H
 #define ULTRASONIC_H
 
 #include "config.h"
+#include <stdint.h>
 
 /*******************************************************************************
  * FUNCTION PROTOTYPES

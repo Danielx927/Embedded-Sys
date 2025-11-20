@@ -1,15 +1,11 @@
-/**
- * @file    barcode.h
- * @brief   Barcode scanning and decoding interface
- * @author  Embedded Systems
- * @date    2025
- */
-
 #ifndef BARCODE_H
 #define BARCODE_H
 
 #include "config.h"
 #include "navigation.h"
+#include "hardware/gpio.h"
+#include <stdint.h>
+#include <stdbool.h>
 
 /*******************************************************************************
  * FUNCTION PROTOTYPES
@@ -42,5 +38,15 @@ uint32_t barcode_get_isr_count(void);
  * @return Width count
  */
 int barcode_get_width_count(void);
+
+int uint32_cmp(const void *a, const void *b);
+void ir_isr(uint gpio, uint32_t events);
+int get_bar_digit(int bar_pos1, int bar_pos2);
+char decode_char(const int binary[9]);
+char reverse_map(char c);
+void str_reverse(char *str);
+float find_threshold(uint32_t *local_widths, int start, int end);
+char decode_local(uint32_t *widths);
+void decode_and_process(void);
 
 #endif /* BARCODE_H */

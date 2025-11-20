@@ -1,14 +1,9 @@
-/**
- * @file    utils.h
- * @brief   Utility functions
- * @author  Embedded Systems
- * @date    2025
- */
-
 #ifndef UTILS_H
 #define UTILS_H
 
 #include "config.h"
+#include <stdint.h>
+#include "hardware/i2c.h"
 
 /*******************************************************************************
  * FUNCTION PROTOTYPES

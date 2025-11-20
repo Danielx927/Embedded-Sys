@@ -1,14 +1,9 @@
-/**
- * @file    navigation.h
- * @brief   Navigation state machine and control algorithms
- * @author  Embedded Systems
- * @date    2025
- */
-
 #ifndef NAVIGATION_H
 #define NAVIGATION_H
 
 #include "config.h"
+#include <stdint.h>
+#include <stdbool.h>
 
 /*******************************************************************************
  * TYPE DEFINITIONS
@@ -58,7 +53,6 @@ typedef enum
 /*******************************************************************************
  * FUNCTION PROTOTYPES
  ******************************************************************************/
-
 /**
  * @brief Update PID controller
  * @param[in,out] pid   Pointer to PID structure

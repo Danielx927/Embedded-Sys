@@ -1,14 +1,8 @@
-/**
- * @file    motors.h
- * @brief   Motor control interface
- * @author  Embedded Systems
- * @date    2025
- */
-
 #ifndef MOTORS_H
 #define MOTORS_H
 
 #include "config.h"
+#include <stdint.h>
 
 /*******************************************************************************
  * FUNCTION PROTOTYPES
@@ -30,5 +24,7 @@ void motors_set_speed(float left_duty, float right_duty);
  * @brief Stop both motors immediately
  */
 void motors_stop(void);
+
+void setup_pwm(uint32_t gpio);
 
 #endif /* MOTORS_H */

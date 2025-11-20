@@ -8,26 +8,27 @@ add_executable(final_demo
     src/imu.c
     src/motors.c
     src/encoders.c
-    src/ir_sensors.c
+    src/line_sensor.c
     src/barcode.c
     src/ultrasonic.c
     src/navigation.c
+    src/multicore_obstacle.c
     src/utils.c
 )
 
 target_include_directories(final_demo PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/include
-    ${CMAKE_CURRENT_LIST_DIR}/src
 )
 
 target_link_libraries(final_demo
     pico_stdlib
+    pico_multicore
+    pico_sync
     hardware_i2c
     hardware_pwm
+    hardware_gpio
+    hardware_irq
     hardware_adc
-    hardware_pio
-    hardware_spi
-    hardware_uart
 )
 
 pico_set_program_name(final_demo "final_demo")

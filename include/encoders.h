@@ -1,14 +1,9 @@
-/**
- * @file    encoders.h
- * @brief   Encoder interface for odometry
- * @author  Embedded Systems
- * @date    2025
- */
-
 #ifndef ENCODERS_H
 #define ENCODERS_H
 
 #include "config.h"
+#include <stdint.h>
+#include "hardware/gpio.h"
 
 /*******************************************************************************
  * TYPE DEFINITIONS
@@ -50,6 +45,8 @@ uint32_t encoders_get_right_pulses(void);
  */
 void encoders_reset(void);
 
+void encoder_callback(uint gpio, uint32_t events);
+
 /**
  * @brief Initialize speed filter
  * @param[out] p_filter Pointer to speed filter structure
@@ -70,4 +67,13 @@ void encoders_filter_update(speed_filter_t *p_filter,
                             float *filtered_left,
                             float *filtered_right);
 
+
+void encoders_filter_init(speed_filter_t * const p_filter);
+
+void encoders_filter_update(speed_filter_t * const p_filter,
+                                float left_speed,
+                                float right_speed,
+                                float *filtered_left,
+                                float *filtered_right);
+                            
 #endif /* ENCODERS_H */

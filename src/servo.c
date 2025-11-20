@@ -1,6 +1,10 @@
 #include "servo.h"
 #include "hardware/pwm.h"
 #include "hardware/gpio.h"
+#include <stdint.h>
+#include <math.h>
+#include <stdbool.h>
+#include "config.h"
 
 // Initialize the servo (sets up PWM slice and default center pulse)
 void init_servo(void) {
