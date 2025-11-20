@@ -11,6 +11,10 @@
 #include "utils.h"
 #include "config.h"
 
+sensor_data_t g_raw_data;
+moving_avg_filter_t g_filter;
+filtered_data_t g_filtered_data;
+
 void imu_init(void) {
     i2c_init(I2C_PORT, I2C_FREQ);
     gpio_set_function(I2C_SDA_PIN, GPIO_FUNC_I2C);

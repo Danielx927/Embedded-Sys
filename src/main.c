@@ -906,3 +906,11 @@ void loop() {
 
     sleep_ms(5);  // Reduced delay for 200Hz control loop (increased from 10ms)
 }
+
+int main(void) {
+    setup();
+    while (true) {
+        loop();
+    }
+    return 0;
+}
