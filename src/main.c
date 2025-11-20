@@ -7,6 +7,7 @@
 #include "hardware/gpio.h"
 #include "hardware/irq.h"
 #include "hardware/pwm.h"
+#include "hardware/adc.h"
 #include "imu.h"
 #include "motors.h"
 #include "line_sensor.h"
@@ -37,22 +38,13 @@ volatile bool scan_complete = false;
 volatile bool obstacle_processed = false;
 volatile bool core0_stopped = false;
 
-volatile uint32_t g_left_pulses = 0;
-volatile uint32_t g_right_pulses = 0;
-
 float target_heading = 0.0f;
 pid_controller_t speed_pid = {SPEED_KP, SPEED_KI, SPEED_KD, 0.0f, 0.0f};
 pid_controller_t heading_pid = {HEADING_KP_RAMP, HEADING_KI_RAMP, HEADING_KD_RAMP, 0.0f, 0.0f};
 pid_controller_t line_pid = {LINE_KP, LINE_KI, LINE_KD, 0.0f, 0.0f};
 speed_filter_t g_speed_filter;
 
-// Barcode globals
-volatile uint64_t last_edge_us = 0;
-volatile bool     last_level   = 0;
-volatile uint32_t widths[MAX_WIDTHS];
-volatile int      num_widths   = 0;
-volatile uint32_t isr_call_count = 0;  // Debug: count ISR calls
-char decoded_barcode[10] = {0};
+
 
 // Navigation
 robot_state_t current_state = STATE_FOLLOWING;

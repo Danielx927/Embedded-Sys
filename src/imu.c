@@ -38,7 +38,7 @@ void mag_init(void){
     i2c_write_register(I2C_PORT, MAG_I2C_ADDR, MR_REG_M, 0x00U);
 }
 
-void imu_read_accel(sensor_data_t *p_data){
+void imu_read_accel(){
     uint8_t buf[6];
     i2c_read_registers(I2C_PORT, ACCEL_I2C_ADDR, OUT_X_L_A | AUTO_INCREMENT, buf, 6);
     
@@ -47,7 +47,7 @@ void imu_read_accel(sensor_data_t *p_data){
     g_raw_data.accel_z = (int16_t)((((uint16_t)buf[5]) << 8) | buf[4]);
 }
 
-void imu_read_mag(sensor_data_t *p_data){
+void imu_read_mag(){
     uint8_t buf[6];
     i2c_read_registers(I2C_PORT, MAG_I2C_ADDR, OUT_X_H_M | AUTO_INCREMENT, buf, 6);
     
@@ -63,7 +63,7 @@ void imu_filter_init(moving_avg_filter_t *p_filter){
     p_filter->buffer_full = FALSE;
 }
 
-void imu_filter_update(moving_avg_filter_t const *p_filter, sensor_data_t const * const p_raw){
+void imu_filter_update(moving_avg_filter_t *p_filter, sensor_data_t *p_raw){
     uint8_t idx = p_filter->buffer_index;
     
     p_filter->accel_buffer[0U][idx] = (int32_t)p_raw->accel_x;
@@ -108,13 +108,14 @@ void imu_filter_average(moving_avg_filter_t *p_filter, filtered_data_t *p_filter
     p_filtered->mag_z = mag_sum[2U] / (int32_t)divisor;
 }
 
-void imu_compute_heading(filtered_data_t const * const p_data, float *heading){
-    *heading = atan2f((float)p_data->mag_y, (float)p_data->mag_x);
+float imu_compute_heading(filtered_data_t *p_data)
+{
+    float heading = atan2f((float)p_data->mag_y, (float)p_data->mag_x);
+    return heading;
 }
 
 float imu_calibrate_heading(moving_avg_filter_t *p_filter, 
-                           sensor_data_t *p_raw_data,
-                           float *initial_heading) {
+                           sensor_data_t *p_raw_data) {
     float sum_heading = 0.0f;
     for (uint8_t i = 0; i < CALIB_SAMPLES; i++) {
         imu_read_accel(p_raw_data);
@@ -123,7 +124,7 @@ float imu_calibrate_heading(moving_avg_filter_t *p_filter,
         
         filtered_data_t filtered;
         imu_filter_average(p_filter, &filtered);
-        sum_heading += imu_compute_heading(&filtered, &initial_heading);
+        sum_heading += imu_compute_heading(&filtered);
         sleep_ms(50);
     }
     return sum_heading / (float)CALIB_SAMPLES;

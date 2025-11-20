@@ -51,9 +51,9 @@ typedef struct
  * FUNCTION PROTOTYPES
  ******************************************************************************/
 
-sensor_data_t g_raw_data;
-moving_avg_filter_t g_filter;
-filtered_data_t g_filtered_data;
+extern sensor_data_t g_raw_data;
+extern moving_avg_filter_t g_filter;
+extern filtered_data_t g_filtered_data;
 /**
  * @brief Initialize IMU sensors (accelerometer and magnetometer)
  */
@@ -66,13 +66,13 @@ void mag_init(void);
  * @brief Read raw accelerometer data
  * @param[out] p_data Pointer to store raw sensor data
  */
-void imu_read_accel(sensor_data_t *p_data);
+void imu_read_accel();
 
 /**
  * @brief Read raw magnetometer data
  * @param[out] p_data Pointer to store raw sensor data
  */
-void imu_read_mag(sensor_data_t *p_data);
+void imu_read_mag();
 
 /**
  * @brief Initialize moving average filter
@@ -85,21 +85,21 @@ void imu_filter_init(moving_avg_filter_t *p_filter);
  * @param[in,out] p_filter Pointer to filter structure
  * @param[in]     p_raw    Pointer to raw sensor data
  */
-void imu_filter_update(moving_avg_filter_t const *p_filter, sensor_data_t const * const p_raw);
+void imu_filter_update(moving_avg_filter_t *p_filter, sensor_data_t *p_raw);
 
 /**
  * @brief Compute average from moving average filter
  * @param[in]  p_filter   Pointer to filter structure
  * @param[out] p_filtered Pointer to filtered data structure
  */
-void imu_filter_average(const moving_avg_filter_t *p_filter, filtered_data_t *p_filtered);
+void imu_filter_average(moving_avg_filter_t *p_filter, filtered_data_t *p_filtered);
 
 /**
  * @brief Compute heading from magnetometer data
  * @param[in] p_data Pointer to filtered data
  * @return Heading in radians
  */
-void imu_compute_heading(filtered_data_t const * const p_data, float *heading);
+float imu_compute_heading(filtered_data_t *p_data);
 
 /**
  * @brief Calibrate initial heading

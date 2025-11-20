@@ -9,6 +9,9 @@
  * TYPE DEFINITIONS
  ******************************************************************************/
 
+extern volatile uint32_t g_left_pulses;
+extern volatile uint32_t g_right_pulses;
+
 /**
  * @brief Speed moving average filter structure
  */

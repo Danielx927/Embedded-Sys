@@ -10,7 +10,12 @@
 /*******************************************************************************
  * FUNCTION PROTOTYPES
  ******************************************************************************/
-
+extern volatile uint64_t last_edge_us;
+extern volatile bool     last_level;
+extern volatile uint32_t widths[MAX_WIDTHS];
+extern volatile int      num_widths;
+extern volatile uint32_t isr_call_count;  // Debug: count ISR calls
+extern char decoded_barcode[10];
 /**
  * @brief Initialize barcode scanner
  */

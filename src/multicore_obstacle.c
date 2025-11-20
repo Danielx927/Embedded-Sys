@@ -9,7 +9,7 @@
 /*******************************************************************************
  * GLOBAL VARIABLES
  ******************************************************************************/
-mutex_t obstacle_mutex;
+extern mutex_t obstacle_mutex;
 obstacle_state_t g_obstacle_state = {
     .obstacle_detected = false,
     .obstacle_distance = -1.0f,
