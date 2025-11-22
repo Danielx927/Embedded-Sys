@@ -36,11 +36,22 @@ bool_t barcode_check_and_process(uint32_t now_ms,
         if (strlen(decoded_barcode) > 0) {
             if (strcmp(decoded_barcode, "XGX") == 0 || 
                 strcmp(decoded_barcode, "9Q9") == 0) {
-                *turn_dir = TURN_LEFT;
+                *turn_dir = TURN_RIGHT;
                 *turn_start = now_ms + TURN_DELAY_MS;
                 return true;
             } else if (strcmp(decoded_barcode, "939") == 0) {
-                *turn_dir = TURN_RIGHT;
+                *turn_dir = TURN_LEFT;
+                *turn_start = now_ms + TURN_DELAY_MS;
+                return true;
+            } else if (strlen(decoded_barcode) == 1) {
+                char letter = decoded_barcode[0];
+                if (letter == 'A' || letter == 'C' || letter == 'E' || letter == 'G' || letter == 'I' ||
+                    letter == 'K' || letter == 'M' || letter == 'O' || letter == 'Q' || letter == 'S' ||
+                    letter == 'U' || letter == 'W' || letter == 'Y') {
+                    *turn_dir = TURN_RIGHT;
+                } else {
+                    *turn_dir = TURN_LEFT;
+                }
                 *turn_start = now_ms + TURN_DELAY_MS;
                 return true;
             }

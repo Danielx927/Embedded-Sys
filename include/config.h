@@ -101,7 +101,7 @@ typedef uint8_t bool_t;
 /* Line PID */
 #define LINE_KP             0.12f
 #define LINE_KI             0.003f
-#define LINE_KD             0.08f
+#define LINE_KD             0.16f
 #define LINE_SETPOINT       1600
 #define LINE_SCALE          1000.0f
 #define LINE_ERROR_THRESHOLD 1200.0f
@@ -121,9 +121,6 @@ typedef uint8_t bool_t;
 #define RECOVERY_SPEED_SWITCHED 0.16f
 #define RECOVERY_DISABLE_TIME_MS 1800
 #define RECOVERY_TIMEOUT_MS 2250
-#define CURVE_DETECTION_THRESHOLD 600.0f
-#define CURVE_HISTORY_SIZE 5
-#define MIN_HEADING_CHANGE_RATE 0.3f
 
 /*******************************************************************************
  * OBSTACLE DETECTION

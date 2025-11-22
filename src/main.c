@@ -1,4 +1,5 @@
 #include "pico/stdlib.h"
+#include "pico/mutex.h"
 #include <stdio.h>
 #include <stdint.h>
 #include <stdbool.h>
@@ -28,23 +29,15 @@ static void gpio_callback(uint gpio, uint32_t events)
 }
 
 mutex_t obstacle_mutex;
-volatile bool obstacle_detected = false;
-volatile float obstacle_distance = -1.0f;
-volatile float obstacle_left_extent = 0.0f;
-volatile float obstacle_right_extent = 0.0f;
-volatile float obstacle_left_angle = 0.0f;
-volatile float obstacle_right_angle = 0.0f;
-volatile bool scan_complete = false;
-volatile bool obstacle_processed = false;
-volatile bool core0_stopped = false;
+
+// Use extern for obstacle state from multicore_obstacle
+extern obstacle_state_t g_obstacle_state;
 
 float target_heading = 0.0f;
 pid_controller_t speed_pid = {SPEED_KP, SPEED_KI, SPEED_KD, 0.0f, 0.0f};
 pid_controller_t heading_pid = {HEADING_KP_RAMP, HEADING_KI_RAMP, HEADING_KD_RAMP, 0.0f, 0.0f};
 pid_controller_t line_pid = {LINE_KP, LINE_KI, LINE_KD, 0.0f, 0.0f};
 speed_filter_t g_speed_filter;
-
-
 
 // Navigation
 robot_state_t current_state = STATE_FOLLOWING;
@@ -61,13 +54,9 @@ bool recovery_switched = false;    // New: Flag to track if direction switched
 int recovery_switch_count = 0;     // New: Counter for switches per recovery attempt
 bool recovery_session_active = false;  // New: Flag for active recovery session
 int recovery_following_entries = 0;  // New: Counter for FOLLOWING entries in session
-float recovery_error_history[CURVE_HISTORY_SIZE] = {0};  // New: Track errors
-uint8_t recovery_error_index = 0;                         // New: Circular buffer index
-float recovery_start_heading = 0.0f;  // New: Heading when recovery started
-float recovery_start_distance = 0.0f; // New: Distance when recovery started
 uint32_t obstacle_stop_start = 0;
 uint32_t obstacle_count = 0;
-// const char* state_names[] = {"FOLLOWING", "TURNING", "RECOVERY"};
+//static const char* state_names[] = {"FOLLOWING", "TURNING", "RECOVERY"};
 
 // Detour navigation variables
 float saved_line_heading = 0.0f;        // Heading before starting detour
@@ -81,10 +70,11 @@ float detour_phase_start_heading = 0.0f; // Heading at start of turn phase
 
 turn_dir_t scheduled_turn = TURN_NONE;
 
-
 void setup() {
     stdio_init_all();
     sleep_ms(1500);
+
+    mutex_init(&obstacle_mutex);
 
     // IMU initialization
     imu_init();
@@ -105,7 +95,7 @@ void setup() {
     // Encoders
     encoders_init();
     
-    // Register GPIO callback
+    // Register the master GPIO callback ONCE for all GPIOs
     gpio_set_irq_callback(&gpio_callback);
     irq_set_enabled(IO_IRQ_BANK0, true);
 
@@ -115,25 +105,25 @@ void setup() {
     // PIDs
     navigation_init(&speed_pid, &heading_pid, &line_pid);
 
-    // Calibrate heading
+    // Calibrate heading (assume robot is still)
     target_heading = imu_calibrate_heading(&g_filter, &g_raw_data);
     printf("Initial heading calibrated: %.2f rad\n", target_heading);
     printf("Core 0: Main control loop starting\n");
 }
 
 void loop() {
-     uint32_t last_time_ms = 0;
-     uint32_t last_print_ms = 0;
-     float base_duty = INITIAL_BASE_DUTY;
-     float current_target_speed = 0.0f;
-     float ramp_start_time = 0.0f;
-     bool ramping = true;
-     uint32_t prev_left_pulses = 0;
-     uint32_t prev_right_pulses = 0;
-     float left_distance = 0.0f;
-     float right_distance = 0.0f;
-     uint32_t line_lost_counter = 0;
-     uint8_t recovery_counter = 0;
+    static uint32_t last_time_ms = 0;
+    static uint32_t last_print_ms = 0;
+    static float base_duty = INITIAL_BASE_DUTY;
+    static float current_target_speed = 0.0f;
+    static float ramp_start_time = 0.0f;
+    static bool ramping = true;
+    static uint32_t prev_left_pulses = 0;
+    static uint32_t prev_right_pulses = 0;
+    static float left_distance = 0.0f;
+    static float right_distance = 0.0f;
+    static uint32_t line_lost_counter = 0;
+    static uint8_t recovery_counter = 0;
 
     uint32_t now_ms = millis_now();
     float dt = (float)(now_ms - last_time_ms) / 1000.0f;
@@ -169,34 +159,24 @@ void loop() {
 
     float heading = imu_compute_heading(&g_filtered_data);
 
-    // Read line IR with filtering
+    // Read line IR with filtering using module
+    uint16_t line_filtered = line_sensor_read_filtered();
+    float line_error = line_sensor_compute_error(line_filtered);
+    
+    // For debug print: get raw if needed
     adc_select_input(LEFT_IR_ADC_CHANNEL);
     uint16_t line_raw = adc_read();
-    
-    // Simple moving average for line sensor (2 samples for faster response)
-     uint16_t line_history[2] = {1600, 1600};
-     uint8_t line_idx = 0;
-    line_history[line_idx] = line_raw;
-    line_idx = (line_idx + 1) % 2;
-    uint16_t line_filtered = (line_history[0] + line_history[1]) / 2;
-    
-    float line_error = (float)(line_filtered - LINE_SETPOINT) / LINE_SCALE;
 
-    // Check barcode timeout (only if >=29 widths, then use timeout)
-    if (num_widths >= 29 && last_edge_us != 0 && (now_ms - (uint32_t)(last_edge_us / 1000) >= BARCODE_PROCESS_TIMEOUT_MS)) {
-        decode_and_process();
-        num_widths = 0;
-        if (strlen(decoded_barcode) > 0) {
-            if (strcmp(decoded_barcode, "XGX") == 0 || strcmp(decoded_barcode, "9Q9") == 0) {
-                scheduled_turn = TURN_LEFT;
-                turn_start_time = now_ms + TURN_DELAY_MS;  // Set the time to start the turn after delay
-                printf("Decoded barcode: %s, Left turn scheduled in %d ms\n", decoded_barcode, TURN_DELAY_MS);
-            } else if (strcmp(decoded_barcode, "939") == 0) {
-                scheduled_turn = TURN_RIGHT;
-                turn_start_time = now_ms + TURN_DELAY_MS;  // Set the time to start the turn after delay
-                printf("Decoded barcode: %s, Right turn scheduled in %d ms\n", decoded_barcode, TURN_DELAY_MS);
-            }
-            memset(decoded_barcode, 0, sizeof(decoded_barcode));
+    // Check barcode timeout using modular function
+    turn_dir_t detected_turn;
+    uint32_t barcode_turn_start;
+    if (barcode_check_and_process(now_ms, &detected_turn, &barcode_turn_start)) {
+        scheduled_turn = detected_turn;
+        turn_start_time = barcode_turn_start;
+        if (scheduled_turn == TURN_LEFT) {
+            printf("Decoded barcode: Left turn scheduled in %d ms\n", TURN_DELAY_MS);
+        } else if (scheduled_turn == TURN_RIGHT) {
+            printf("Decoded barcode: Right turn scheduled in %d ms\n", TURN_DELAY_MS);
         }
     }
 
@@ -213,11 +193,13 @@ void loop() {
         turn_start_time = 0;  // Reset the timer
     }
 
-    // Compute speeds and distances
-    uint32_t delta_left = g_left_pulses - prev_left_pulses;
-    uint32_t delta_right = g_right_pulses - prev_right_pulses;
-    prev_left_pulses = g_left_pulses;
-    prev_right_pulses = g_right_pulses;
+    // Compute speeds and distances using module
+    uint32_t left_pulses = encoders_get_left_pulses();
+    uint32_t right_pulses = encoders_get_right_pulses();
+    uint32_t delta_left = left_pulses - prev_left_pulses;
+    uint32_t delta_right = right_pulses - prev_right_pulses;
+    prev_left_pulses = left_pulses;
+    prev_right_pulses = right_pulses;
 
     float left_speed = (float)delta_left * DIST_PER_PULSE / dt;
     float right_speed = (float)delta_right * DIST_PER_PULSE / dt;
@@ -241,38 +223,31 @@ void loop() {
 
     if (current_state == STATE_FOLLOWING) {
         // Check for obstacles (non-blocking check from Core 1)
-        bool check_obstacle = false;
+        // bool check_obstacle = false;
         float dist_center = 0.0f;
         bool scan_ready = false;
         
-        mutex_enter_blocking(&obstacle_mutex);
-        check_obstacle = obstacle_detected;
-        dist_center = obstacle_distance;
-        scan_ready = scan_complete;
-        mutex_exit(&obstacle_mutex);
-        
-        if (check_obstacle) {
+        if (obstacle_check_detected(&dist_center)) {
             // STOP IMMEDIATELY when obstacle detected
             motors_set_speed(0.0f, 0.0f);
+            
+            float left_extent, right_extent, left_angle, right_angle;
+            scan_ready = obstacle_get_scan_results(&left_extent, &right_extent, &left_angle, &right_angle);
             
             if (!scan_ready) {
                 // First detection - signal Core 1 we've stopped
                 printf("\n⚠️  OBSTACLE DETECTED at %.1f cm! Stopped - waiting for scan...\n", dist_center);
                 
-                mutex_enter_blocking(&obstacle_mutex);
-                core0_stopped = true;
-                mutex_exit(&obstacle_mutex);
+                obstacle_signal_core0_stopped();
                 
                 // Wait for scan to complete (Core 1 is scanning)
                 while (true) {
-                    mutex_enter_blocking(&obstacle_mutex);
-                    scan_ready = scan_complete;
-                    mutex_exit(&obstacle_mutex);
+                    sleep_ms(50);
+                    scan_ready = obstacle_get_scan_results(&left_extent, &right_extent, &left_angle, &right_angle);
                     
                     if (scan_ready) {
                         break;
                     }
-                    sleep_ms(50);
                 }
             }
             
@@ -280,16 +255,6 @@ void loop() {
             current_state = STATE_OBSTACLE_DETECTED;
             printf("\n⚠️  Scan complete! Processing obstacle...\n");
             sleep_ms(200);
-            
-            // Get scan results from Core 1
-            float left_extent, right_extent, left_angle, right_angle;
-            
-            mutex_enter_blocking(&obstacle_mutex);
-            left_extent = obstacle_left_extent;
-            right_extent = obstacle_right_extent;
-            left_angle = obstacle_left_angle;
-            right_angle = obstacle_right_angle;
-            mutex_exit(&obstacle_mutex);
             
             // Determine recommended path based on valid readings
             const char* chosen_path = "UNKNOWN";
@@ -411,21 +376,30 @@ void loop() {
             current_state = STATE_OBSTACLE_STOPPED;
             
             // Signal Core 1 that obstacle has been processed
-            mutex_enter_blocking(&obstacle_mutex);
-            obstacle_processed = true;
-            mutex_exit(&obstacle_mutex);
+            obstacle_signal_processed();
         } else if (fabsf(line_error) > LINE_ERROR_THRESHOLD / LINE_SCALE) {
             // Debounce line loss detection (reduced from 5 to 3 for faster response)
             if (now_ms >= recovery_disabled_until) {
                 line_lost_counter++;
                 if (line_lost_counter >= 3) {
                     current_state = STATE_RECOVERY;
+                    line_lost_counter = 0;  // Reset counter to prevent carryover on re-entry
                     // Positive error = seeing white/high value = line is to the LEFT → turn LEFT (negative dir)
                     // Negative error = seeing black/low value = line is to the RIGHT → turn RIGHT (positive dir)
                     recovery_dir = (line_error > 0.0f) ? -1.0f : 1.0f;
-                    // Clear error history when entering recovery
-                    memset(recovery_error_history, 0, sizeof(recovery_error_history));
-                    recovery_error_index = 0;
+                    // Line lost recovery - no message printed
+                }
+            }
+        } else if (fabsf(line_error) > 1.05f) {  // Threshold for "very white" readings (very off the line)
+            // Debounce line loss detection (increased to 7 consecutive for stricter entry into recovery)
+            if (now_ms >= recovery_disabled_until) {
+                line_lost_counter++;
+                if (line_lost_counter >= 10) {
+                    current_state = STATE_RECOVERY;
+                    line_lost_counter = 0;  // Reset counter to prevent carryover on re-entry
+                    // Positive error = seeing white/high value = line is to the LEFT → turn LEFT (negative dir)
+                    // Negative error = seeing black/low value = line is to the RIGHT → turn RIGHT (positive dir)
+                    recovery_dir = (line_error > 0.0f) ? -1.0f : 1.0f;
                     // Line lost recovery - no message printed
                 }
             }
@@ -460,6 +434,8 @@ void loop() {
             // Reset PID integrals
             heading_pid.integral = 0.0f;
             line_pid.integral = 0.0f;
+            speed_pid.integral = 0.0f;
+            speed_pid.last_error = 0.0f;
             
             recovery_disabled_until = now_ms + RECOVERY_DISABLE_TIME_MS;  // Disable recovery after turn
         }
@@ -467,8 +443,6 @@ void loop() {
         // Initialize recovery variables if not already set (moved here to fix timing bug)
         if (recovery_start_time == 0) {
             recovery_start_time = now_ms;
-            recovery_start_heading = heading;      // NEW: Store initial heading
-            recovery_start_distance = total_distance;  // NEW: Store initial distance
             recovery_switched = false;
             if (!recovery_session_active) {
                 recovery_session_active = true;
@@ -482,10 +456,6 @@ void loop() {
             current_target_speed = RECOVERY_SPEED_SWITCHED;
         }
         
-        // Store current error in circular buffer
-        recovery_error_history[recovery_error_index] = fabsf(line_error);
-        recovery_error_index = (recovery_error_index + 1) % CURVE_HISTORY_SIZE;
-        
         // Use increased turn rate if direction has been switched
         float current_turn_rate = recovery_switched ? RECOVERY_TURN_RATE_SWITCHED : RECOVERY_TURN_RATE;
         heading_adjust = current_turn_rate * recovery_dir;
@@ -493,50 +463,18 @@ void loop() {
         // Check for recovery timeout with enhanced curve detection
         uint32_t recovery_elapsed = now_ms - recovery_start_time;
         if (recovery_switch_count < 1 && !recovery_switched && recovery_elapsed > RECOVERY_TIMEOUT_MS) {
-            // Calculate average error magnitude over recent history
-            float avg_error = 0.0f;
-            for (int i = 0; i < CURVE_HISTORY_SIZE; i++) {
-                avg_error += recovery_error_history[i];
-            }
-            avg_error /= CURVE_HISTORY_SIZE;
-            
-            // NEW: Calculate heading change rate
-            float distance_traveled = total_distance - recovery_start_distance;
-            float heading_change = fabsf(angle_diff(heading, recovery_start_heading));
-            float heading_change_rate = (distance_traveled > 0.001f) ? (heading_change / distance_traveled) : 0.0f;
-            
-            // Curve detection: BOTH criteria must be met
-            bool small_error = (avg_error < CURVE_DETECTION_THRESHOLD / LINE_SCALE);
-            bool significant_turn = (heading_change_rate > MIN_HEADING_CHANGE_RATE);
-            bool is_curve = small_error && significant_turn;
-            
-            if (is_curve) {
-                printf("CURVE CONFIRMED: avg_err=%.3f, dist=%.3fm, Δhead=%.3frad, rate=%.1frad/m (%.0f°/m)\n", 
-                       avg_error, distance_traveled, heading_change, heading_change_rate, 
-                       heading_change_rate * 180.0f / M_PI);
-                // Reset timeout to continue following curve
-                recovery_start_time = now_ms;
-                recovery_start_heading = heading;
-                recovery_start_distance = total_distance;
-            } else {
-                printf("TRUE LINE LOSS: avg_err=%.3f, dist=%.3fm, Δhead=%.3frad, rate=%.1frad/m (%.0f°/m) - SWITCHING\n", 
-                       avg_error, distance_traveled, heading_change, heading_change_rate,
-                       heading_change_rate * 180.0f / M_PI);
-                recovery_dir = -recovery_dir;
-                recovery_start_time = now_ms;
-                recovery_start_heading = heading;
-                recovery_start_distance = total_distance;
-                recovery_switched = true;
-                recovery_switch_count++;
-                current_target_speed = RECOVERY_SPEED_SWITCHED;  // Set speed immediately when switching
-                printf("Recovery direction switched - increasing speed to %.2f m/s\n", RECOVERY_SPEED_SWITCHED);
-            }
+            recovery_dir = -recovery_dir;
+            recovery_start_time = now_ms;
+            recovery_switched = true;
+            recovery_switch_count++;
+            current_target_speed = RECOVERY_SPEED_SWITCHED;  // Set speed immediately when switching
+            printf("Recovery direction switched - increasing speed to %.2f m/s\n", RECOVERY_SPEED_SWITCHED);
         }
         
         // Check if line is recovered with debouncing
         if (fabsf(line_error) <= LINE_ERROR_THRESHOLD / LINE_SCALE) {
             recovery_counter++;
-            if (recovery_counter >= 1) {
+            if (recovery_counter >= 3) {
                 // Line recovered - no message printed
                 current_state = STATE_FOLLOWING;
                 recovery_counter = 0;
@@ -546,8 +484,6 @@ void loop() {
                 
                 // Reset ALL recovery session variables
                 recovery_start_time = 0;        // CRITICAL: Reset timestamp first
-                recovery_start_heading = 0.0f;  // NEW: Reset heading
-                recovery_start_distance = 0.0f; // NEW: Reset distance
                 recovery_switched = false;      // Reset switch flag
                 recovery_switch_count = 0;      // Reset counter
                 recovery_session_active = false; // End session
@@ -556,6 +492,8 @@ void loop() {
                 // Reset PID integrals
                 heading_pid.integral = 0.0f;
                 line_pid.integral = 0.0f;
+                speed_pid.integral = 0.0f;
+                speed_pid.last_error = 0.0f;
             }
         } else {
             recovery_counter = 0;
@@ -661,9 +599,8 @@ void loop() {
             // Print debug and skip rest of loop
             if (now_ms - last_print_ms >= SAMPLE_DELAY_MS) {
                 last_print_ms = now_ms;
-                bool gpio_state = gpio_get(RIGHT_IR_DIGITAL_GPIO);
-                printf("Stored widths=%d, GPIO%d state=%d, ISR calls=%lu, Total dist: %.2fm\n",
-                       num_widths, RIGHT_IR_DIGITAL_GPIO, gpio_state, isr_call_count, total_distance);
+                printf("Stored widths=%d, Total dist: %.2fm\n",
+                       num_widths, total_distance);
             }
             sleep_ms(5);
             return;  // Skip speed PID and motor control at end of loop
@@ -744,9 +681,8 @@ void loop() {
             // Print debug and skip rest of loop
             if (now_ms - last_print_ms >= SAMPLE_DELAY_MS) {
                 last_print_ms = now_ms;
-                bool gpio_state = gpio_get(RIGHT_IR_DIGITAL_GPIO);
-                printf("Stored widths=%d, GPIO%d state=%d, ISR calls=%lu, Total dist: %.2fm\n",
-                       num_widths, RIGHT_IR_DIGITAL_GPIO, gpio_state, isr_call_count, total_distance);
+                printf("Stored widths=%d, Total dist: %.2fm\n",
+                       num_widths, total_distance);
             }
             sleep_ms(5);
             return;  // Skip speed PID and motor control at end of loop
@@ -808,12 +744,7 @@ void loop() {
             line_lost_counter = 0;
             
             // CRITICAL: Reset obstacle flags so Core 1 doesn't trigger immediately
-            mutex_enter_blocking(&obstacle_mutex);
-            obstacle_detected = false;
-            scan_complete = false;
-            obstacle_processed = true;  // Signal Core 1 we're done
-            core0_stopped = false;
-            mutex_exit(&obstacle_mutex);
+            obstacle_reset();
             
             // Reset PIDs
             speed_pid.integral = 0.0f;
@@ -829,12 +760,7 @@ void loop() {
             current_target_speed = TARGET_SPEED_MS;
             
             // CRITICAL: Reset obstacle flags so Core 1 doesn't trigger immediately
-            mutex_enter_blocking(&obstacle_mutex);
-            obstacle_detected = false;
-            scan_complete = false;
-            obstacle_processed = true;  // Signal Core 1 we're done
-            core0_stopped = false;
-            mutex_exit(&obstacle_mutex);
+            obstacle_reset();
         } else {
             // BYPASS speed controller - use fixed duty directly
             base_duty = 0.40f;
@@ -860,9 +786,8 @@ void loop() {
             // Print debug and skip rest of loop
             if (now_ms - last_print_ms >= SAMPLE_DELAY_MS) {
                 last_print_ms = now_ms;
-                bool gpio_state = gpio_get(RIGHT_IR_DIGITAL_GPIO);
-                printf("Stored widths=%d, GPIO%d state=%d, ISR calls=%lu, Total dist: %.2fm\n",
-                       num_widths, RIGHT_IR_DIGITAL_GPIO, gpio_state, isr_call_count, total_distance);
+                printf("Stored widths=%d, Total dist: %.2fm\n",
+                       num_widths, total_distance);
             }
             sleep_ms(5);
             return;  // Skip speed PID and motor control at end of loop
@@ -876,11 +801,11 @@ void loop() {
         current_state == STATE_DETOUR_TURN_PARALLEL || 
         current_state == STATE_DETOUR_TURN_BACK) {
         // Spot turn logic for detour turns (motors opposing)
-        // heading_adjust is set to +/- RECOVERY_TURN_RATE_SWITCHED (0.2)
+        // heading_adjust is set to +/- DETOUR_SPOT_TURN_DUTY (0.4)
         // If heading_adjust is negative (Left turn), we want Left Back (-), Right Forward (+)
-        // left_duty = -0.2, right_duty = 0.2
+        // left_duty = -0.4, right_duty = 0.4
         // If heading_adjust is positive (Right turn), we want Left Forward (+), Right Back (-)
-        // left_duty = 0.2, right_duty = -0.2
+        // left_duty = 0.4, right_duty = -0.4
         
         left_duty = heading_adjust;
         right_duty = -heading_adjust;
@@ -899,9 +824,8 @@ void loop() {
     // Print debug info periodically
     if (now_ms - last_print_ms >= SAMPLE_DELAY_MS) {
         last_print_ms = now_ms;
-        bool gpio_state = gpio_get(RIGHT_IR_DIGITAL_GPIO);
-        printf("Stored widths=%d, GPIO%d state=%d, ISR calls=%lu, Total dist: %.2fm\n",
-               num_widths, RIGHT_IR_DIGITAL_GPIO, gpio_state, isr_call_count, total_distance);
+        printf("Stored widths=%d, Total dist: %.2fm\n",
+               num_widths, total_distance);
     }
 
     sleep_ms(5);  // Reduced delay for 200Hz control loop (increased from 10ms)

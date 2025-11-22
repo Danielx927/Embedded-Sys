@@ -31,6 +31,7 @@ typedef struct
  ******************************************************************************/
 extern mutex_t obstacle_mutex;
 extern obstacle_state_t g_obstacle_state;
+extern mutex_t obstacle_mutex;
 
 /*******************************************************************************
  * FUNCTION PROTOTYPES

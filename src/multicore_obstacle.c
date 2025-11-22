@@ -31,7 +31,7 @@ obstacle_state_t g_obstacle_state = {
  */
 void multicore_obstacle_init(void)
 {
-    mutex_init(&obstacle_mutex);
+    // Mutex initialized in main.c
     
     // Initialize obstacle state
     mutex_enter_blocking(&obstacle_mutex);
