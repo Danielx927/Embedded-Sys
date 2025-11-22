@@ -138,14 +138,21 @@ typedef uint8_t bool_t;
 #define DETOUR_TURN_DURATION_MS  1500
 #define DETOUR_TURN_SPEED        0.08f
 #define DETOUR_MOVE_SPEED        0.08f
-#define DETOUR_HEADING_TOLERANCE 0.10f
+#define DETOUR_HEADING_TOLERANCE 0.05f 
 #define IMU_HEADING_CHECK_INTERVAL_MS 200
-#define DETOUR_HEADING_CORRECTION 0.05f
-#define DETOUR_SPOT_TURN_DUTY 0.4f
+#define DETOUR_HEADING_CORRECTION 0.16f
+#define DETOUR_SPOT_TURN_DUTY 0.6f
+#define DETOUR_SPOT_TURN_POWER_LEFT    0.60f   // power when robot is turning LEFT  (right motor forward)
+#define DETOUR_SPOT_TURN_POWER_RIGHT   0.80f   // power when robot is turning RIGHT (left motor forward)
 
-/* Empirical IMU turn deltas */
-#define PERP_LEFT_DELTA  (3.55f - 2.59f)
-#define PERP_RIGHT_DELTA (4.48f - 3.55f)
+#define TURN_90_OVERSHOOT_LEFT_DEG   8.0f   // extra degrees when turning LEFT
+#define TURN_90_OVERSHOOT_RIGHT_DEG  25.0f   // extra degrees when turning RIGHT (your right turn is weaker)
+
+#define TURN_90_OVERSHOOT_LEFT_RAD   (TURN_90_OVERSHOOT_LEFT_DEG  * M_PI / 180.0f)
+#define TURN_90_OVERSHOOT_RIGHT_RAD  (TURN_90_OVERSHOOT_RIGHT_DEG * M_PI / 180.0f)
+
+// Exact 65° in radians
+#define FINAL_TURN_ANGLE_RAD   1.134f   // 65 * π / 180 = 1.13446
 
 /*******************************************************************************
  * BARCODE PARAMETERS

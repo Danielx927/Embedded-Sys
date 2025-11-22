@@ -514,285 +514,286 @@ void loop() {
         return;
     } else if (current_state == STATE_DETOUR_STABILIZE) {
         motors_set_speed(0.0f, 0.0f);
-        if (now_ms - stabilize_start_time >= 500) { // 500ms stabilization
+        if (now_ms - stabilize_start_time >= 1000) { // 1000ms stabilization
              current_state = next_detour_state;
              detour_phase_start_time = 0; // Reset for next phase
         }
     } else if (current_state == STATE_DETOUR_TURN_PERPENDICULAR) {
-        // Step 1: Turn 90° perpendicular to the line (IMU-controlled turn)
-        // NO PID - pure open-loop turn with IMU verification
-        
-        // Initialize on entry
-        if (detour_phase_start_time == 0) {
-            detour_phase_start_time = now_ms;
-            detour_phase_start_heading = heading;
-            
-            // Calculate target heading using empirical deltas
-            if (detour_direction < 0) {
-                // Left turn
-                detour_target_heading = saved_line_heading - PERP_LEFT_DELTA;
-            } else {
-                // Right turn
-                detour_target_heading = saved_line_heading + PERP_RIGHT_DELTA;
-            }
-            
-            // Normalize to [-π, π]
-            while (detour_target_heading > M_PI) detour_target_heading -= 2.0f * M_PI;
-            while (detour_target_heading < -M_PI) detour_target_heading += 2.0f * M_PI;
-            
-            printf("✅ Starting perpendicular turn\n");
-            printf("   From: %.2f rad, To: %.2f rad (%.1f°)\n", 
-                   heading, detour_target_heading, detour_target_heading * 180.0f / M_PI);
-        }
-        
-        // Apply constant turn rate (same as barcode turns)
-        if (detour_direction < 0) {
-            heading_adjust = -DETOUR_SPOT_TURN_DUTY;  // Turn left (negative adjust)
-        } else {
-            heading_adjust = DETOUR_SPOT_TURN_DUTY;   // Turn right (positive adjust)
-        }
-        
-        // Check if turn complete using IMU feedback
-        if (execute_imu_controlled_turn(heading, detour_direction, detour_target_heading)) {
-            detour_start_distance = total_distance;
-            // saved_line_heading = heading;  // REMOVED: Keep original line heading
-            detour_phase_start_time = 0;  // Reset for next phase
-            current_state = STATE_DETOUR_MOVE_SIDEWAYS;
-            printf("✅ Perpendicular turn complete. Moving sideways %.1f cm...\n", 
-                   detour_sideways_distance);
-        }
+    if (detour_phase_start_time == 0) {
+        detour_phase_start_time = now_ms;
+        detour_phase_start_heading = heading;
+        saved_line_heading = heading;                        // Save original line heading
+
+        // Inside STATE_DETOUR_TURN_PERPENDICULAR entry
+        float turn_90 = (detour_direction < 0) 
+            ? (-M_PI_2 - TURN_90_OVERSHOOT_LEFT_RAD)   // turning LEFT  → overshoot more
+            : ( M_PI_2 + TURN_90_OVERSHOOT_RIGHT_RAD); // turning RIGHT → overshoot more
+
+        detour_target_heading = heading + turn_90;
+
+        // Normalize to [-π, π]
+        while (detour_target_heading >  M_PI) detour_target_heading -= 2.0f * M_PI;
+        while (detour_target_heading < -M_PI) detour_target_heading += 2.0f * M_PI;
+
+        printf("Starting perpendicular 90 degree turn %s\n",
+               (detour_direction < 0) ? "LEFT" : "RIGHT");
+        printf("   From: %.2f rad -> To: %.2f rad\n", heading, detour_target_heading);
+    }
+
+    // Determine which physical direction we are turning RIGHT NOW
+    bool turning_left = (angle_diff(detour_target_heading, heading) < 0.0f);
+    // or in the two 90° turns you can simply use detour_direction
+
+    float power;
+    if (turning_left) {
+        power = DETOUR_SPOT_TURN_POWER_LEFT;     // right motor gets more juice
+        motors_set_speed(-power, +power);
+    } else {
+        power = DETOUR_SPOT_TURN_POWER_RIGHT;    // left motor gets more juice
+        motors_set_speed(+power, -power);
+    }
+
+    // Wait until IMU says we're there
+    if (execute_imu_controlled_turn(heading, detour_direction, detour_target_heading)) {
+        detour_start_distance = total_distance;
+        detour_phase_start_time = 0;
+        current_state = STATE_DETOUR_MOVE_SIDEWAYS;
+        printf("Perpendicular 90 degree turn complete. Moving sideways %.1f cm...\n",
+               detour_sideways_distance);
+    }
         
     } else if (current_state == STATE_DETOUR_MOVE_SIDEWAYS) {
-        // Step 2: Move sideways (perpendicular to line) by detour_sideways_distance
+    // CRITICAL: Use the ACTUAL heading at the end of the perpendicular turn
+    if (detour_phase_start_time == 0) {
+        detour_phase_start_time = now_ms;
+        detour_start_distance = total_distance;
         
-        float distance_moved = (total_distance - detour_start_distance) * 100.0f; // to cm
+        // ← THIS IS THE KEY FIX
+        detour_target_heading = heading;   // Lock the CURRENT heading (post-turn)
         
-        if (distance_moved >= detour_sideways_distance) {
-            detour_start_distance = total_distance;
-            current_state = STATE_DETOUR_STABILIZE;
-            next_detour_state = STATE_DETOUR_TURN_PARALLEL;
-            stabilize_start_time = now_ms;
-            printf("✅ Sideways movement complete (%.1f cm). Stabilizing...\n", distance_moved);
-        } else {
-            // BYPASS speed controller - use fixed duty directly
-            base_duty = 0.40f;
-            
-            // Move straight with gentle heading hold
-            float heading_error = angle_diff(detour_target_heading, heading);
-            heading_adjust = -DETOUR_HEADING_CORRECTION * heading_error;
-            
-            // Clamp to prevent shakiness
-            if (heading_adjust > 0.08f) heading_adjust = 0.08f;
-            if (heading_adjust < -0.08f) heading_adjust = -0.08f;
-            
-            // Apply motor control BEFORE speed PID section
-            float left_duty = base_duty + heading_adjust;
-            float right_duty = (base_duty - heading_adjust) * RIGHT_DUTY_FACTOR;
-            
-            if (left_duty > 1.0f) left_duty = 1.0f;
-            if (left_duty < -1.0f) left_duty = -1.0f;
-            if (right_duty > 1.0f) right_duty = 1.0f;
-            if (right_duty < -1.0f) right_duty = -1.0f;
-            
-            motors_set_speed(left_duty, right_duty);
-            
-            // Print debug and skip rest of loop
-            if (now_ms - last_print_ms >= SAMPLE_DELAY_MS) {
-                last_print_ms = now_ms;
-                printf("Stored widths=%d, Total dist: %.2fm\n",
-                       num_widths, total_distance);
-            }
-            sleep_ms(5);
-            return;  // Skip speed PID and motor control at end of loop
-        }
+        printf("Sideways move started → locking heading to %.3f rad (%.1f°)\n",
+               heading, heading * 180.0f / M_PI);
+    }
+
+    float distance_moved = (total_distance - detour_start_distance) * 100.0f;  // cm
+
+    if (distance_moved >= detour_sideways_distance) {  // no buffer
+        detour_phase_start_time = 0;
+        current_state = STATE_DETOUR_TURN_PARALLEL;
+        printf("Sideways move complete (%.1f cm) → starting parallel turn\n", distance_moved);
+        return;
+    }
+
+    // Symmetric power + strong heading hold
+    float base_duty = 0.40f;
+
+    float heading_error = angle_diff(detour_target_heading, heading);
+    float heading_adjust = -0.14f * heading_error;           // very strong correction
+    heading_adjust = fmaxf(fminf(heading_adjust, 0.15f), -0.15f);
+
+    float left_duty  = base_duty + heading_adjust;
+    float right_duty = base_duty - heading_adjust;           // ← NO RIGHT_DUTY_FACTOR!
+
+    left_duty  = fmaxf(fminf(left_duty,  1.0f), 0.0f);
+    right_duty = fmaxf(fminf(right_duty, 1.0f), 0.0f);
+
+    motors_set_speed(left_duty, right_duty);
+
+    if (now_ms - last_print_ms >= SAMPLE_DELAY_MS) {
+        last_print_ms = now_ms;
+        printf("Sideways: %.1f/%.1f cm, heading=%.3f err=%.3f\n",
+               distance_moved, detour_sideways_distance, heading, heading_error);
+    }
         
     } else if (current_state == STATE_DETOUR_TURN_PARALLEL) {
-        // Step 3: Turn back to original heading (parallel to line)
-        // NO PID - pure open-loop turn with IMU verification
-        
-        // Initialize on entry
-        if (detour_phase_start_time == 0) {
-            detour_phase_start_time = now_ms;
-            detour_phase_start_heading = heading;
-            
-            // Calculate target heading for opposite turn (back to parallel)
-            // We want to face the original line direction
-            detour_target_heading = saved_line_heading;
-            
-            // Normalize to [-π, π]
-            while (detour_target_heading > M_PI) detour_target_heading -= 2.0f * M_PI;
-            while (detour_target_heading < -M_PI) detour_target_heading += 2.0f * M_PI;
-            
-            printf("✅ Starting parallel turn\n");
-            printf("   From: %.2f rad, To: %.2f rad (%.1f°)\n", 
-                   heading, detour_target_heading, detour_target_heading * 180.0f / M_PI);
-        }
-        
-        // Apply constant turn rate (opposite direction, same as barcode)
-        if (detour_direction < 0) {
-            heading_adjust = DETOUR_SPOT_TURN_DUTY;   // Turn right (back to parallel)
-        } else {
-            heading_adjust = -DETOUR_SPOT_TURN_DUTY;  // Turn left (back to parallel)
-        }
-        
-        // Check if turn complete using IMU feedback
-        if (execute_imu_controlled_turn(heading, -detour_direction, detour_target_heading)) {  // Opposite direction
-            detour_start_distance = total_distance;
-            // saved_line_heading = heading;  // REMOVED: Keep original line heading
-            detour_phase_start_time = 0;  // Reset for next phase
-            current_state = STATE_DETOUR_MOVE_FORWARD;
-            printf("✅ Parallel turn complete. Moving forward %.1f cm...\n", 
-                   detour_parallel_distance);
-        }
+    if (detour_phase_start_time == 0) {
+        detour_phase_start_time = now_ms;
+        detour_phase_start_heading = heading;
+
+        // Inside STATE_DETOUR_TURN_PARALLEL entry
+        float turn_90_back = (detour_direction < 0) 
+            ? ( M_PI_2 + TURN_90_OVERSHOOT_RIGHT_RAD)   // now turning RIGHT → use right overshoot
+            : (-M_PI_2 - TURN_90_OVERSHOOT_LEFT_RAD);   // now turning LEFT  → use left overshoot
+
+        detour_target_heading = heading + turn_90_back;
+
+        while (detour_target_heading >  M_PI) detour_target_heading -= 2.0f * M_PI;
+        while (detour_target_heading < -M_PI) detour_target_heading += 2.0f * M_PI;
+
+        printf("Starting parallel 90 degree turn\n");
+        printf("   From: %.2f rad -> To: %.2f rad\n", heading, detour_target_heading);
+    }
+
+    // Determine which physical direction we are turning RIGHT NOW
+    bool turning_left = (angle_diff(detour_target_heading, heading) < 0.0f);
+    // or in the two 90° turns you can simply use detour_direction
+
+    float power;
+    if (turning_left) {
+        power = DETOUR_SPOT_TURN_POWER_LEFT;     // right motor gets more juice
+        motors_set_speed(-power, +power);
+    } else {
+        power = DETOUR_SPOT_TURN_POWER_RIGHT;    // left motor gets more juice
+        motors_set_speed(+power, -power);
+    }
+
+    if (execute_imu_controlled_turn(heading, -detour_direction, detour_target_heading)) {
+        detour_start_distance = total_distance;
+        detour_phase_start_time = 0;
+        current_state = STATE_DETOUR_MOVE_FORWARD;
+        printf("Parallel 90 degree turn complete. Moving forward %.1f cm...\n",
+               detour_parallel_distance);
+    }
         
     } else if (current_state == STATE_DETOUR_MOVE_FORWARD) {
-        // Step 4: Move forward (parallel to line) by detour_parallel_distance
-        
-        float distance_moved = (total_distance - detour_start_distance) * 100.0f;
-        
-        if (distance_moved >= detour_parallel_distance) {
-            detour_start_distance = total_distance;
-            current_state = STATE_DETOUR_STABILIZE;
-            next_detour_state = STATE_DETOUR_TURN_BACK;
-            stabilize_start_time = now_ms;
-            printf("✅ Forward movement complete (%.1f cm). Stabilizing...\n", distance_moved);
-        } else {
-            // BYPASS speed controller - use fixed duty directly
-            base_duty = 0.40f;
-            
-            // Move straight with gentle heading hold
-            float heading_error = angle_diff(detour_target_heading, heading);
-            heading_adjust = -DETOUR_HEADING_CORRECTION * heading_error;
-            
-            if (heading_adjust > 0.08f) heading_adjust = 0.08f;
-            if (heading_adjust < -0.08f) heading_adjust = -0.08f;
-            
-            // Apply motor control BEFORE speed PID section
-            float left_duty = base_duty + heading_adjust;
-            float right_duty = (base_duty - heading_adjust) * RIGHT_DUTY_FACTOR;
-            
-            if (left_duty > 1.0f) left_duty = 1.0f;
-            if (left_duty < -1.0f) left_duty = -1.0f;
-            if (right_duty > 1.0f) right_duty = 1.0f;
-            if (right_duty < -1.0f) right_duty = -1.0f;
-            
-            motors_set_speed(left_duty, right_duty);
-            
-            // Print debug and skip rest of loop
-            if (now_ms - last_print_ms >= SAMPLE_DELAY_MS) {
-                last_print_ms = now_ms;
-                printf("Stored widths=%d, Total dist: %.2fm\n",
-                       num_widths, total_distance);
-            }
-            sleep_ms(5);
-            return;  // Skip speed PID and motor control at end of loop
-        }
-        
-    } else if (current_state == STATE_DETOUR_TURN_BACK) {
-        // Step 5: Turn back toward the line (65° instead of 90°)
-        // NO PID - pure open-loop turn with IMU verification
-        
-        // Initialize on entry
-        if (detour_phase_start_time == 0) {
-            detour_phase_start_time = now_ms;
-            detour_phase_start_heading = heading;
-            
-            // Calculate target heading for 65° turn (65/90 of perpendicular turn)
-            if (detour_direction < 0) {
-                // Left detour: Turn Right 65° (65/90 of right perpendicular turn)
-                detour_target_heading = saved_line_heading + (PERP_RIGHT_DELTA * 65.0f / 90.0f);
-            } else {
-                // Right detour: Turn Left 65° (65/90 of left perpendicular turn)
-                detour_target_heading = saved_line_heading - (PERP_LEFT_DELTA * 65.0f / 90.0f);
-            }
-            
-            // Normalize to [-π, π]
-            while (detour_target_heading > M_PI) detour_target_heading -= 2.0f * M_PI;
-            while (detour_target_heading < -M_PI) detour_target_heading += 2.0f * M_PI;
-            
-            printf("✅ Starting 65° turn back to line\n");
-            printf("   From: %.2f rad, To: %.2f rad (%.1f°)\n", 
-                   heading, detour_target_heading, detour_target_heading * 180.0f / M_PI);
-        }
-        
-        // Apply constant turn rate (opposite direction from first turn, same as barcode)
-        if (detour_direction < 0) {
-            heading_adjust = DETOUR_SPOT_TURN_DUTY;   // Turn right (opposite of initial left turn)
-        } else {
-            heading_adjust = -DETOUR_SPOT_TURN_DUTY;  // Turn left (opposite of initial right turn)
-        }
-        
-        // Check if turn complete using IMU feedback
-        if (execute_imu_controlled_turn(heading, -detour_direction, detour_target_heading)) {  // Opposite direction
-            detour_start_distance = total_distance;
-            detour_phase_start_time = 0;
-            current_state = STATE_DETOUR_REJOIN;
-            printf("✅ 65° turn back complete. Moving to rejoin line...\n");
-        }
-    } else if (current_state == STATE_DETOUR_REJOIN) {
-        // Step 6: Move back to line while monitoring IR sensor
-        
-        float distance_moved = (total_distance - detour_start_distance) * 100.0f;
-        
-        // Check if line is detected
-        if (fabsf(line_error) < 0.6f) {  // Line found (scaled error < 600)
-            printf("🎯 Line re-acquired! Resuming line following...\n");
-            current_state = STATE_FOLLOWING;
-            target_heading = heading;
-            current_target_speed = TARGET_SPEED_MS;
-            recovery_disabled_until = now_ms + RECOVERY_DISABLE_TIME_MS;
-            line_lost_counter = 0;
-            
-            // CRITICAL: Reset obstacle flags so Core 1 doesn't trigger immediately
-            obstacle_reset();
-            
-            // Reset PIDs
-            speed_pid.integral = 0.0f;
-            speed_pid.last_error = 0.0f;
-            heading_pid.integral = 0.0f;
-            line_pid.integral = 0.0f;
-        } else if (distance_moved >= detour_sideways_distance + 10.0f) {
-            // Moved far enough, should have found line
-            printf("⚠️  Line not found after %.1f cm. Returning to FOLLOWING anyway...\n", 
-                   distance_moved);
-            current_state = STATE_FOLLOWING;
-            target_heading = heading;
-            current_target_speed = TARGET_SPEED_MS;
-            
-            // CRITICAL: Reset obstacle flags so Core 1 doesn't trigger immediately
-            obstacle_reset();
-        } else {
-            // BYPASS speed controller - use fixed duty directly
-            base_duty = 0.40f;
-            
-            // Move straight with gentle heading hold
-            float heading_error = angle_diff(detour_target_heading, heading);
-            heading_adjust = -DETOUR_HEADING_CORRECTION * heading_error;
-            
-            if (heading_adjust > 0.08f) heading_adjust = 0.08f;
-            if (heading_adjust < -0.08f) heading_adjust = -0.08f;
-            
-            // Apply motor control BEFORE speed PID section
-            float left_duty = base_duty + heading_adjust;
-            float right_duty = (base_duty - heading_adjust) * RIGHT_DUTY_FACTOR;
-            
-            if (left_duty > 1.0f) left_duty = 1.0f;
-            if (left_duty < -1.0f) left_duty = -1.0f;
-            if (right_duty > 1.0f) right_duty = 1.0f;
-            if (right_duty < -1.0f) right_duty = -1.0f;
-            
-            motors_set_speed(left_duty, right_duty);
-            
-            // Print debug and skip rest of loop
-            if (now_ms - last_print_ms >= SAMPLE_DELAY_MS) {
-                last_print_ms = now_ms;
-                printf("Stored widths=%d, Total dist: %.2fm\n",
-                       num_widths, total_distance);
-            }
-            sleep_ms(5);
-            return;  // Skip speed PID and motor control at end of loop
-        }
+    if (detour_phase_start_time == 0) {
+        detour_phase_start_time = now_ms;
+        detour_start_distance = total_distance;
+
+        // THIS IS THE CRITICAL FIX
+        detour_target_heading = saved_line_heading;   // ← Use original line heading!
+        // NOT: detour_target_heading = heading;
+
+        printf("Forward move started → locking to ORIGINAL line heading %.3f rad (%.1f°)\n",
+               saved_line_heading, saved_line_heading * 180.0f / M_PI);
     }
+
+    float distance_moved = (total_distance - detour_start_distance) * 100.0f;
+
+    if (distance_moved >= detour_parallel_distance + 5.0f) {
+        detour_phase_start_time = 0;
+        current_state = STATE_DETOUR_TURN_BACK;
+        printf("Forward %.1f cm complete → turning back to line\n", distance_moved);
+        return;
+    }
+
+    // Strong symmetric heading hold to original direction
+    float base_duty = 0.40f;
+    float heading_error = angle_diff(detour_target_heading, heading);
+    float heading_adjust = -0.16f * heading_error;           // very strong!
+    heading_adjust = fmaxf(fminf(heading_adjust, 0.20f), -0.20f);
+
+    float left_duty  = base_duty + heading_adjust;
+    float right_duty = (base_duty - heading_adjust) * (RIGHT_DUTY_FACTOR * 0.9f);   // ← ONLY HERE!
+
+    left_duty  = fmaxf(fminf(left_duty,  1.0f), 0.0f);
+    right_duty = fmaxf(fminf(right_duty, 1.0f), 0.0f);
+
+    motors_set_speed(left_duty, right_duty);
+
+    if (now_ms - last_print_ms >= SAMPLE_DELAY_MS) {
+        last_print_ms = now_ms;
+        printf("Parallel: %.1f/35.0 cm | target=%.3f curr=%.3f err=%.3f\n",
+               distance_moved, saved_line_heading, heading, heading_error);
+    }
+} else if (current_state == STATE_DETOUR_TURN_BACK) {
+    if (detour_phase_start_time == 0) {
+        detour_phase_start_time = now_ms;
+        detour_phase_start_heading = heading;
+
+        // We want to turn ~65° INWARD (opposite of detour_direction)
+        float turn_angle = (detour_direction < 0) 
+            ? +FINAL_TURN_ANGLE_RAD    // ~65° RIGHT (if we went left)
+            : -FINAL_TURN_ANGLE_RAD;   // ~65° LEFT  (if we went right)
+
+        detour_target_heading = saved_line_heading + turn_angle;
+
+        // Normalize
+        while (detour_target_heading >  M_PI) detour_target_heading -= 2.0f * M_PI;
+        while (detour_target_heading < -M_PI) detour_target_heading += 2.0f * M_PI;
+
+        printf("Starting FINAL 65° inward turn %s \n",
+               (detour_direction < 0) ? "RIGHT" : "LEFT");
+    }
+
+    // Use asymmetric power based on actual turn direction
+    float error = angle_diff(detour_target_heading, heading);
+    float power = (error < 0.0f) 
+        ? DETOUR_SPOT_TURN_POWER_LEFT 
+        : DETOUR_SPOT_TURN_POWER_RIGHT;
+
+    motors_set_speed((error < 0.0f ? -power : power),
+                     (error < 0.0f ?  power : -power));
+
+    if (execute_imu_controlled_turn(heading, (error < 0.0f ? -1 : 1), detour_target_heading)) {
+        detour_phase_start_time = 0;
+        current_state = STATE_DETOUR_REJOIN;
+        printf("Final ~65° inward turn complete → rejoining line\n");
+    }
+    } else if (current_state == STATE_DETOUR_REJOIN) {
+    // Step 6: Move back to line while monitoring IR sensor
+    if (detour_phase_start_time == 0) {
+        detour_phase_start_time = now_ms;
+        detour_start_distance = total_distance;  // CRITICAL: Reset distance HERE!
+        
+        printf("Rejoining line → distance reset at %.2f m\n", total_distance);
+    }
+    
+    float distance_moved = (total_distance - detour_start_distance) * 100.0f;  // cm
+    
+    // Check if line is detected
+    if (fabsf(line_error) < 0.6f) {  // Line found (scaled error < 600)
+        printf("🎯 Line re-acquired after %.1f cm! Resuming line following...\n", distance_moved);
+        current_state = STATE_FOLLOWING;
+        target_heading = heading;
+        current_target_speed = TARGET_SPEED_MS;
+        recovery_disabled_until = now_ms + RECOVERY_DISABLE_TIME_MS;
+        line_lost_counter = 0;
+        
+        // CRITICAL: Reset obstacle flags so Core 1 doesn't trigger immediately
+        obstacle_reset();
+        
+        // Reset PIDs
+        speed_pid.integral = 0.0f;
+        speed_pid.last_error = 0.0f;
+        heading_pid.integral = 0.0f;
+        line_pid.integral = 0.0f;
+        
+        detour_phase_start_time = 0;  // Clean up
+    } else if (distance_moved >= 45.0f) {  // Fixed max distance (instead of detour_sideways_distance + 10.0f)
+        // Moved far enough, should have found line
+        printf("⚠️  Line not found after %.1f cm. Returning to FOLLOWING anyway...\n", 
+               distance_moved);
+        current_state = STATE_FOLLOWING;
+        target_heading = heading;
+        current_target_speed = TARGET_SPEED_MS;
+        
+        // CRITICAL: Reset obstacle flags so Core 1 doesn't trigger immediately
+        obstacle_reset();
+        
+        detour_phase_start_time = 0;  // Clean up
+    } else {
+        // BYPASS speed controller - use fixed duty directly
+        base_duty = 0.40f;
+        
+        // Move straight with gentle heading hold
+        float heading_error = angle_diff(detour_target_heading, heading);
+        heading_adjust = -DETOUR_HEADING_CORRECTION * heading_error;
+        
+        if (heading_adjust > 0.08f) heading_adjust = 0.08f;
+        if (heading_adjust < -0.08f) heading_adjust = -0.08f;
+        
+        // Apply motor control BEFORE speed PID section
+        float left_duty = base_duty + heading_adjust;
+        float right_duty = (base_duty - heading_adjust) * RIGHT_DUTY_FACTOR;
+        
+        if (left_duty > 1.0f) left_duty = 1.0f;
+        if (left_duty < -1.0f) left_duty = -1.0f;
+        if (right_duty > 1.0f) right_duty = 1.0f;
+        if (right_duty < -1.0f) right_duty = -1.0f;
+        
+        motors_set_speed(left_duty, right_duty);
+        
+        // Print debug and skip rest of loop
+        if (now_ms - last_print_ms >= SAMPLE_DELAY_MS) {
+            last_print_ms = now_ms;
+            printf("Stored widths=%d, Total dist: %.2fm\n",
+                   num_widths, total_distance);
+        }
+        sleep_ms(5);
+        return;  // Skip speed PID and motor control at end of loop
+    }
+}
 
     // Apply controls
     float left_duty, right_duty;
