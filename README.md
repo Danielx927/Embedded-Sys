@@ -2,11 +2,13 @@
 
 ## Overview of Project
 
-This project is about developing an autonomous robot capable of following a line, interpreting barcode commands, avoiding obstacles, and transmitting telemetry under real-time constraints.
+This project is about developing an autonomous robot capable of following a line, interpreting barcode commands, avoiding obstacles, and transmitting telemetry under real time constraints.
 
 This is a multicore version of the line following robot that uses **both cores** of the RP2040:
-- **Core 0**: Main control loop (line following, navigation, barcode detection)
+- **Core 0**: Main control loop (line following, navigation, barcode detection, telemetry)
 - **Core 1**: Ultrasonic obstacle detection (runs independently in parallel)
+
+MQTT telemetry is streamed over Wi Fi to a local Mosquitto broker and visualised using a single file HTML dashboard.
 
 ## Folder Structure & Summary
 
@@ -22,9 +24,10 @@ project_root/
 │   ├── ultrasonic.c            # Ultrasonic + servo (used by Core 1)
 │   ├── navigation.c            # State machine and PID control
 │   ├── multicore_obstacle.c    # Core 1: Obstacle detection task
+│   ├── telemetry.c             # Wi Fi + MQTT client and telemetry publisher
 │   └── utils.c                 # Utility functions
 ├── include/
-│   ├── config.h                # Configuration constants
+│   ├── config.h                # Configuration constants (pins, PID, Wi Fi, MQTT)
 │   ├── imu.h                   # IMU interface
 │   ├── motors.h                # Motor interface
 │   ├── encoders.h              # Encoder interface
@@ -33,6 +36,7 @@ project_root/
 │   ├── ultrasonic.h            # Ultrasonic interface
 │   ├── navigation.h            # Navigation interface
 │   ├── multicore_obstacle.h    # Multicore obstacle detection
+│   ├── telemetry.h             # Telemetry snapshot API
 │   └── utils.h                 # Utility functions
 ├── test/
 │   ├── B1.c                    # Barcode decoding at speed test
@@ -43,22 +47,23 @@ project_root/
 │   ├── M1.c                    # Motor control with PID test
 │   ├── M2-L.c                  # Left turn test
 │   ├── M2-R.c                  # Right turn test
-│   ├── M2-U.c                  # U-turn test
+│   ├── M2-U.c                  # U turn test
 │   ├── O1.c                    # Ultrasonic distance test
 │   ├── O2.c                    # Obstacle width estimation test
 │   ├── Q1.c                    # MQTT telemetry test
-│   ├── UC01.c                  # Safe boot & initialization test
+│   ├── UC01.c                  # Safe boot and initialization test
 │   ├── UC02.c                  # Start line following test
-│   ├── UC03.c                  # Line loss & recovery test
-│   ├── UC04.c                  # Detect & decode barcode test
+│   ├── UC03.c                  # Line loss and recovery test
+│   ├── UC04.c                  # Detect and decode barcode test
 │   ├── UC05.c                  # Execute navigation command test
-│   ├── UC06.c                  # Obstacle detection & safe stop test
-│   ├── UC07.c                  # Obstacle edge scan & width estimation test
-│   ├── UC08.c                  # Bypass obstacle & rejoin line test
-│   ├── UC09.c                  # Telemetry & event publishing test
-│   ├── UC10.c                  # Wi-Fi drop & auto-reconnect test
+│   ├── UC06.c                  # Obstacle detection and safe stop test
+│   ├── UC07.c                  # Obstacle edge scan and width estimation test
+│   ├── UC08.c                  # Bypass obstacle and rejoin line test
+│   ├── UC09.c                  # Telemetry and event publishing test
+│   ├── UC10.c                  # Wi Fi drop and auto reconnect test
 │   └── UC11.c                  # Emergency stop test
-├── CMakeLists.txt              # Build configuration (with multicore)
+├── CMakeLists.txt              # Build configuration for final_demo target
+├── dashboard.html              # Single page MQTT dashboard (Paho over WebSockets)
 └── README.md                   # This file
 ```
 
@@ -71,6 +76,64 @@ project_root/
 5. Flash `final_demo.uf2` to your Robo Pico
 6. Test the robot on a line following path
 
+## MQTT Telemetry and Dashboard
+
+The robot connects to a Mosquitto broker running on the laptop. Parameters such as SSID,
+password, broker IP address and publish interval are defined in `config.h`.
+
+### Telemetry Topics
+
+Telemetry is published under the `car/telemetry` namespace:
+
+- `car/telemetry/state`  
+  Current high-level robot state, for example `FOLLOWING`, `RECOVERY`,
+  `OBSTACLE_STOPPED`, `DETOUR_REJOIN`.
+
+- `car/telemetry/speed`  
+  Average forward speed in meters per second.
+
+- `car/telemetry/distance`  
+  Total distance travelled in meters.
+
+- `car/telemetry/heading`  
+  IMU heading in degrees.
+
+- `car/telemetry/line_error`  
+  Normalised line position error used by the line-following controller.
+
+- `car/telemetry/barcode`  
+  Last decoded barcode value, published when a new code is detected.
+
+- `car/telemetry/obstacle/distance`  
+  Measured distance to the obstacle at detection time.
+
+- `car/telemetry/obstacle/left_extent`  
+  Lateral extent of the obstacle on the left side from the scan.
+
+- `car/telemetry/obstacle/right_extent`  
+  Lateral extent of the obstacle on the right side from the scan.
+
+- `car/telemetry/obstacle/path`  
+  Recommended path chosen during detour, for example `LEFT`, `RIGHT`, or `BLOCKED`.
+
+### Using the HTML Dashboard
+
+1. Start Mosquitto on the laptop with:
+   - TCP listener on port `1883`
+   - WebSockets listener on port `9001`
+
+2. Open `dashboard.html` in a modern browser (Chrome or Edge).
+
+3. Enter the broker IP address used by the Pico (for example `192.168.137.1`) and click **Connect**.
+
+4. Once the Pico is running and connected, the dashboard displays:
+
+   - Real time speed, distance, heading and line error  
+   - Current movement state and last decoded barcode  
+   - Obstacle distance, chosen path and left or right extents when a detour is triggered  
+
+This satisfies the requirement that the MQTT dashboard shows real time line position,
+barcode events, movement states and obstacle data.
 
 
 ## Key Differences from Single-Core Implementation
