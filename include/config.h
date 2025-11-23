@@ -179,4 +179,22 @@ typedef uint8_t bool_t;
 #define SAMPLE_DELAY_MS     200U
 #define CALIB_SAMPLES       20U
 
+/*******************************************************************************
+ * WIFI CONFIGURATION & MQTT PARAMETERS
+ ******************************************************************************/
+/* Wi Fi and MQTT config */
+#define WIFI_SSID       "thisismywifi"
+#define WIFI_PASSWORD   "88888888"
+
+// Broker IPv4 address
+#define MQTT_BROKER_IP0 192
+#define MQTT_BROKER_IP1 168
+#define MQTT_BROKER_IP2 137
+#define MQTT_BROKER_IP3 1
+
+// Telemetry rate in milliseconds
+#define TELEMETRY_PERIOD_MS    100   // 10 Hz
+#define TELEMETRY_RETRY_MS     2000  // Wi Fi / MQTT reconnect retry
+
+
 #endif /* CONFIG_H */
