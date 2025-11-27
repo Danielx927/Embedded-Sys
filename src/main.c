@@ -18,6 +18,7 @@
 #include "navigation.h"
 #include "utils.h"
 #include "config.h"
+#include "telemetry.h"
 
 static void gpio_callback(uint gpio, uint32_t events)
 {
@@ -70,6 +71,25 @@ float detour_phase_start_heading = 0.0f; // Heading at start of turn phase
 
 turn_dir_t scheduled_turn = TURN_NONE;
 
+static const char* robot_state_to_string(robot_state_t s) {
+    switch (s) {
+        case STATE_FOLLOWING:              return "FOLLOWING";
+        case STATE_TURNING:                return "TURNING";
+        case STATE_RECOVERY:               return "RECOVERY";
+        case STATE_OBSTACLE_DETECTED:      return "OBSTACLE_DETECTED";
+        case STATE_OBSTACLE_STOPPED:       return "OBSTACLE_STOPPED";
+        case STATE_DETOUR_STABILIZE:       return "DETOUR_STABILIZE";
+        case STATE_DETOUR_TURN_PERPENDICULAR: return "DETOUR_TURN_PERP";
+        case STATE_DETOUR_MOVE_SIDEWAYS:   return "DETOUR_MOVE_SIDE";
+        case STATE_DETOUR_TURN_PARALLEL:   return "DETOUR_TURN_PARALLEL";
+        case STATE_DETOUR_MOVE_FORWARD:    return "DETOUR_MOVE_FWD";
+        case STATE_DETOUR_TURN_BACK:       return "DETOUR_TURN_BACK";
+        case STATE_DETOUR_REJOIN:          return "DETOUR_REJOIN";
+        default:                           return "UNKNOWN";
+    }
+}
+
+
 void setup() {
     stdio_init_all();
     sleep_ms(1500);
@@ -109,6 +129,9 @@ void setup() {
     target_heading = imu_calibrate_heading(&g_filter, &g_raw_data);
     printf("Initial heading calibrated: %.2f rad\n", target_heading);
     printf("Core 0: Main control loop starting\n");
+
+    // Initialise Wi-Fi + MQTT telemetry
+    telemetry_init();
 }
 
 void loop() {
@@ -173,11 +196,17 @@ void loop() {
     if (barcode_check_and_process(now_ms, &detected_turn, &barcode_turn_start)) {
         scheduled_turn = detected_turn;
         turn_start_time = barcode_turn_start;
+
+        uint32_t barcode_code = 0;
         if (scheduled_turn == TURN_LEFT) {
             printf("Decoded barcode: Left turn scheduled in %d ms\n", TURN_DELAY_MS);
+            barcode_code = 1;   // 1 = LEFT
         } else if (scheduled_turn == TURN_RIGHT) {
             printf("Decoded barcode: Right turn scheduled in %d ms\n", TURN_DELAY_MS);
+            barcode_code = 2;   // 2 = RIGHT
         }
+
+        telemetry_publish_barcode(barcode_code);
     }
 
     // Check if it's time to start the turn
@@ -235,7 +264,7 @@ void loop() {
             scan_ready = obstacle_get_scan_results(&left_extent, &right_extent, &left_angle, &right_angle);
             
             if (!scan_ready) {
-                // First detection - signal Core 1 we've stopped
+                // First detection - signal Core 1 we have stopped
                 printf("\n⚠️  OBSTACLE DETECTED at %.1f cm! Stopped - waiting for scan...\n", dist_center);
                 
                 obstacle_signal_core0_stopped();
@@ -320,6 +349,14 @@ void loop() {
             
             printf("\nRecommended Path: %s\n", chosen_path);
             
+            /* MQTT obstacle telemetry */
+            telemetry_publish_obstacle(
+                dist_center,
+                left_valid  ? left_extent  : 0.0f,
+                right_valid ? right_extent : 0.0f,
+                chosen_path
+            );
+
             printf("\n--- Robot State at Detection ---\n");
             printf("Total Distance Travelled: %.2f m\n", total_distance);
             printf("Current Speed: %.2f m/s (Left: %.2f, Right: %.2f)\n", 
@@ -542,7 +579,7 @@ void loop() {
 
     // Determine which physical direction we are turning RIGHT NOW
     bool turning_left = (angle_diff(detour_target_heading, heading) < 0.0f);
-    // or in the two 90° turns you can simply use detour_direction
+    // or in the two 90 degree turns you can simply use detour_direction
 
     float power;
     if (turning_left) {
@@ -553,7 +590,7 @@ void loop() {
         motors_set_speed(+power, -power);
     }
 
-    // Wait until IMU says we're there
+    // Wait until IMU says we are there
     if (execute_imu_controlled_turn(heading, detour_direction, detour_target_heading)) {
         detour_start_distance = total_distance;
         detour_phase_start_time = 0;
@@ -568,7 +605,7 @@ void loop() {
         detour_phase_start_time = now_ms;
         detour_start_distance = total_distance;
         
-        // ← THIS IS THE KEY FIX
+        // This is the key fix
         detour_target_heading = heading;   // Lock the CURRENT heading (post-turn)
         
         printf("Sideways move started → locking heading to %.3f rad (%.1f°)\n",
@@ -592,7 +629,7 @@ void loop() {
     heading_adjust = fmaxf(fminf(heading_adjust, 0.15f), -0.15f);
 
     float left_duty  = base_duty + heading_adjust;
-    float right_duty = base_duty - heading_adjust;           // ← NO RIGHT_DUTY_FACTOR!
+    float right_duty = base_duty - heading_adjust;           // No RIGHT_DUTY_FACTOR here
 
     left_duty  = fmaxf(fminf(left_duty,  1.0f), 0.0f);
     right_duty = fmaxf(fminf(right_duty, 1.0f), 0.0f);
@@ -626,7 +663,7 @@ void loop() {
 
     // Determine which physical direction we are turning RIGHT NOW
     bool turning_left = (angle_diff(detour_target_heading, heading) < 0.0f);
-    // or in the two 90° turns you can simply use detour_direction
+    // or in the two 90 degree turns you can simply use detour_direction
 
     float power;
     if (turning_left) {
@@ -650,9 +687,8 @@ void loop() {
         detour_phase_start_time = now_ms;
         detour_start_distance = total_distance;
 
-        // THIS IS THE CRITICAL FIX
-        detour_target_heading = saved_line_heading;   // ← Use original line heading!
-        // NOT: detour_target_heading = heading;
+        // This is the critical fix
+        detour_target_heading = saved_line_heading;   // Use original line heading
 
         printf("Forward move started → locking to ORIGINAL line heading %.3f rad (%.1f°)\n",
                saved_line_heading, saved_line_heading * 180.0f / M_PI);
@@ -670,11 +706,11 @@ void loop() {
     // Strong symmetric heading hold to original direction
     float base_duty = 0.40f;
     float heading_error = angle_diff(detour_target_heading, heading);
-    float heading_adjust = -0.16f * heading_error;           // very strong!
+    float heading_adjust = -0.16f * heading_error;           // very strong
     heading_adjust = fmaxf(fminf(heading_adjust, 0.20f), -0.20f);
 
     float left_duty  = base_duty + heading_adjust;
-    float right_duty = (base_duty - heading_adjust) * (RIGHT_DUTY_FACTOR * 0.9f);   // ← ONLY HERE!
+    float right_duty = (base_duty - heading_adjust) * (RIGHT_DUTY_FACTOR * 0.9f);   // Only here
 
     left_duty  = fmaxf(fminf(left_duty,  1.0f), 0.0f);
     right_duty = fmaxf(fminf(right_duty, 1.0f), 0.0f);
@@ -691,7 +727,7 @@ void loop() {
         detour_phase_start_time = now_ms;
         detour_phase_start_heading = heading;
 
-        // We want to turn ~65° INWARD (opposite of detour_direction)
+        // We want to turn ~65° inward (opposite of detour_direction)
         float turn_angle = (detour_direction < 0) 
             ? +FINAL_TURN_ANGLE_RAD    // ~65° RIGHT (if we went left)
             : -FINAL_TURN_ANGLE_RAD;   // ~65° LEFT  (if we went right)
@@ -724,7 +760,7 @@ void loop() {
     // Step 6: Move back to line while monitoring IR sensor
     if (detour_phase_start_time == 0) {
         detour_phase_start_time = now_ms;
-        detour_start_distance = total_distance;  // CRITICAL: Reset distance HERE!
+        detour_start_distance = total_distance;  // Critical: reset distance here
         
         printf("Rejoining line → distance reset at %.2f m\n", total_distance);
     }
@@ -740,7 +776,7 @@ void loop() {
         recovery_disabled_until = now_ms + RECOVERY_DISABLE_TIME_MS;
         line_lost_counter = 0;
         
-        // CRITICAL: Reset obstacle flags so Core 1 doesn't trigger immediately
+        // Critical: reset obstacle flags so Core 1 does not trigger immediately
         obstacle_reset();
         
         // Reset PIDs
@@ -758,12 +794,12 @@ void loop() {
         target_heading = heading;
         current_target_speed = TARGET_SPEED_MS;
         
-        // CRITICAL: Reset obstacle flags so Core 1 doesn't trigger immediately
+        // Critical: reset obstacle flags so Core 1 does not trigger immediately
         obstacle_reset();
         
         detour_phase_start_time = 0;  // Clean up
     } else {
-        // BYPASS speed controller - use fixed duty directly
+        // Bypass speed controller - use fixed duty directly
         base_duty = 0.40f;
         
         // Move straight with gentle heading hold
@@ -801,15 +837,10 @@ void loop() {
     if (current_state == STATE_DETOUR_TURN_PERPENDICULAR || 
         current_state == STATE_DETOUR_TURN_PARALLEL || 
         current_state == STATE_DETOUR_TURN_BACK) {
-        // Spot turn logic for detour turns (motors opposing)
-        // heading_adjust is set to +/- DETOUR_SPOT_TURN_DUTY (0.4)
-        // If heading_adjust is negative (Left turn), we want Left Back (-), Right Forward (+)
-        // left_duty = -0.4, right_duty = 0.4
-        // If heading_adjust is positive (Right turn), we want Left Forward (+), Right Back (-)
-        // left_duty = 0.4, right_duty = -0.4
-        
+
         left_duty = heading_adjust;
         right_duty = -heading_adjust;
+
     } else {
         left_duty = base_duty + heading_adjust;
         right_duty = (base_duty - heading_adjust) * RIGHT_DUTY_FACTOR;
@@ -821,6 +852,18 @@ void loop() {
     if (right_duty < -1.0f) right_duty = -1.0f;
 
     motors_set_speed(left_duty, right_duty);
+
+    // Build telemetry snapshot and run Wi Fi / MQTT state machine
+    telemetry_snapshot_t snap;
+    snap.speed_mps     = average_speed;
+    snap.distance_m    = total_distance;
+    snap.heading_deg   = heading * 180.0f / (float)M_PI;   // dashboard expects degrees
+    snap.line_error    = line_error;
+    snap.state         = robot_state_to_string(current_state);
+    snap.barcode       = 0;
+    snap.barcode_valid = false;
+
+    telemetry_step(&snap, now_ms);
 
     // Print debug info periodically
     if (now_ms - last_print_ms >= SAMPLE_DELAY_MS) {
