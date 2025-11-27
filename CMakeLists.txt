@@ -14,7 +14,6 @@ add_executable(final_demo
     src/navigation.c
     src/multicore_obstacle.c
     src/utils.c
-    src/telemetry.c
 )
 
 target_include_directories(final_demo PRIVATE
@@ -30,8 +29,6 @@ target_link_libraries(final_demo
     hardware_gpio
     hardware_irq
     hardware_adc
-    pico_cyw43_arch_lwip_threadsafe_background
-    pico_lwip_mqtt
 )
 
 pico_set_program_name(final_demo "final_demo")
